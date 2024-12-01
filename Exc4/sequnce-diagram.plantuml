@@ -1,0 +1,78 @@
+@startuml
+
+autonumber
+
+participant web
+participant core as "core-api"
+box "osago-integrator"
+participant osago as "osago-integrator-service"
+control s1 as "Order scheduler"
+control s2 as "Result sender"
+database db as "osago-integrator-db"
+end box
+participant ext as "external OSAGO"
+
+web -> core : Создать заявку на ОСАГО
+core -> osago : Создать заявку на ОСАГО
+
+loop Создать N заявок на ОСАГО по количеству подключенных внешних систем
+    osago -> db :  Создать заявку в локальной очереди
+    db --> osago : Необработаннаяя заявка создана
+end
+note right
+Transactional outbox pattern
+end note
+
+
+osago --> core : Заявки созданы
+
+core --> web : Ответить пользователю
+web -> core : Создать websocket соединение
+core -> core : Ожидание ответа в течение 60 секунд
+
+note right
+Timer pattern
+end note
+
+alt Время ожидания не истекло
+
+group By schedule
+    s1 -> db : Получить список необработанных заявок
+    db --> s1 : Список заявок
+    loop
+        s1 -> ext : Отправить заявку
+        ext -> s1 : Ответ
+        s1 -> db : Пометить заявку как отправленную
+        db --> s1
+    end
+end
+note right
+Transactional outbox pattern cont.
+end note
+
+group By schedule
+    s2 -> db : Получить список отправленных заявок
+    db --> s2 : Список заявок
+    loop
+        s2 -> ext : Запросить результат заявки
+        ext -> s2 : Ответ
+        s2 -> db : Пометить заявку как обработанную
+        db --> s2
+        s2 ->> core : Отправить результат заявки
+        core ->> web : Отправить результат заявки
+
+    end
+end
+note right
+Transactional outbox pattern cont.
+end note
+
+else Время ожидания истекло
+    core ->> web : Отправить ошибку и закрыть websocket соединение
+    core -> osago : Отменить заявку на ОСАГО
+    osago -> db : Отменить заявки
+    db --> osago
+    osago --> core
+end
+
+@enduml
